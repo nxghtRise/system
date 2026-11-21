@@ -3,12 +3,25 @@
 	"gd": {
 		"win": "2.2074"
 	},
-	"version": "v1.0.0",
+	"version": "v1.1.0",
 	"id": "yourname.system",
 	"name": "System",
 	"developer": "yourname",
-	"description": "Simple macro bot: record and replay inputs frame by frame.",
+	"description": "Macro bot with an in-game menu: record and replay inputs frame by frame.",
 	"settings": {
+		"menu-key": {
+			"type": "string",
+			"name": "Menu key",
+			"description": "Key that opens and closes the System menu.",
+			"default": "Insert",
+			"one-of": ["Insert", "Tab", "Home", "End", "Delete", "PageUp", "PageDown", "F6", "F7", "F8"]
+		},
+		"hotkeys": {
+			"type": "bool",
+			"name": "F1-F5 hotkeys",
+			"description": "F1 record, F2 replay, F3 stop, F4 save, F5 load (works inside a level).",
+			"default": true
+		},
 		"tps": {
 			"type": "int",
 			"name": "TPS",
