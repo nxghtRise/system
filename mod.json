@@ -1,0 +1,21 @@
+{
+	"geode": "4.10.2",
+	"gd": {
+		"win": "2.2074"
+	},
+	"version": "v1.0.0",
+	"id": "yourname.system",
+	"name": "System",
+	"developer": "yourname",
+	"description": "Simple macro bot: record and replay inputs frame by frame.",
+	"settings": {
+		"tps": {
+			"type": "int",
+			"name": "TPS",
+			"description": "Fixed physics steps per second used while recording/replaying.",
+			"default": 240,
+			"min": 60,
+			"max": 960
+		}
+	}
+}
