@@ -92,83 +92,224 @@ namespace sys {
 
 // ------------------------------------------------------------------ menu ----
 
+namespace ui {
+    static const ccColor3B PANEL {14, 16, 21};
+    static const ccColor3B SIDE  {10, 12, 16};
+    static const ccColor3B CARD  {24, 27, 34};
+    static const ccColor3B CHIP  {43, 48, 60};
+    static const ccColor3B ACCENT{59, 110, 245};
+    static const ccColor3B WHITE {255, 255, 255};
+    static const ccColor3B GRAY  {150, 156, 168};
+
+    inline CCScale9Sprite* rounded(CCSize size, ccColor3B color) {
+        auto s = CCScale9Sprite::create("square02_001.png");
+        s->setContentSize(size);
+        s->setColor(color);
+        s->setOpacity(255);
+        return s;
+    }
+}
+
 class SystemMenu : public Popup<> {
 protected:
-    CCLabelBMFont* m_status = nullptr;
-    CCLabelBMFont* m_info = nullptr;
-    CCLabelBMFont* m_tps = nullptr;
+    int m_tab = 0;
+    std::vector<Ref<CCNode>> m_dyn; // everything that gets rebuilt on change
 
-    void addButton(char const* text, CCPoint pos, SEL_MenuHandler cb, float scale = 0.7f) {
-        auto spr = ButtonSprite::create(text);
-        spr->setScale(scale);
-        auto btn = CCMenuItemSpriteExtra::create(spr, this, cb);
-        m_buttonMenu->addChildAtPosition(btn, Anchor::Center, pos);
+    // design coordinates: (0,0) = bottom-left of the window -> offset from center
+    CCPoint C(float x, float y) const {
+        return {x - m_size.width / 2, y - m_size.height / 2};
+    }
+
+    void put(CCNode* n, float x, float y, bool inMenu = false) {
+        CCNode* parent = inMenu ? static_cast<CCNode*>(m_buttonMenu) : static_cast<CCNode*>(m_mainLayer);
+        parent->addChildAtPosition(n, Anchor::Center, C(x, y));
+        if (!inMenu) n->setZOrder(-5); // below the buttons
+        m_dyn.push_back(Ref<CCNode>(n));
+    }
+
+    void clearDyn() {
+        for (auto& n : m_dyn) n->removeFromParent();
+        m_dyn.clear();
+    }
+
+    CCLabelBMFont* text(std::string const& s, char const* font, float scale,
+                        ccColor3B color, float anchorX, float x, float y) {
+        auto l = CCLabelBMFont::create(s.c_str(), font);
+        l->setScale(scale);
+        l->setColor(color);
+        put(l, x, y);
+        l->setAnchorPoint({anchorX, 0.5f});
+        return l;
+    }
+
+    // a rounded card with a title on the left and a "keybind" label on the right
+    void card(float x, float y, float w, float h, char const* title, std::string const& right) {
+        auto bg = ui::rounded({w, h}, ui::CARD);
+        put(bg, x + w / 2, y + h / 2);
+        text(title, "bigFont.fnt", 0.42f, ui::WHITE, 0.f, x + 10, y + h - 14);
+        text(right, "chatFont.fnt", 0.8f, ui::GRAY, 1.f, x + w - 10, y + h - 14);
+    }
+
+    CCMenuItemSpriteExtra* chip(char const* label, bool selected, float w, float cx, float cy,
+                                SEL_MenuHandler cb, int tag) {
+        auto node = CCNode::create();
+        node->setContentSize({w, 20});
+        node->setAnchorPoint({0.5f, 0.5f});
+        auto bg = ui::rounded({w, 20}, selected ? ui::ACCENT : ui::CHIP);
+        bg->setPosition({w / 2, 10});
+        node->addChild(bg);
+        auto l = CCLabelBMFont::create(label, "bigFont.fnt");
+        l->limitLabelWidth(w - 8, 0.38f, 0.1f);
+        l->setPosition({w / 2, 10});
+        node->addChild(l);
+        auto item = CCMenuItemSpriteExtra::create(node, this, cb);
+        item->setTag(tag);
+        put(item, cx, cy, true);
+        return item;
+    }
+
+    CCMenuItemSpriteExtra* toggle(bool on, float cx, float cy, SEL_MenuHandler cb) {
+        auto node = CCNode::create();
+        node->setContentSize({34, 16});
+        node->setAnchorPoint({0.5f, 0.5f});
+        auto track = ui::rounded({34, 16}, on ? ui::ACCENT : ui::CHIP);
+        track->setPosition({17, 8});
+        node->addChild(track);
+        auto knob = CCDrawNode::create();
+        knob->drawDot(ccp(on ? 26.f : 8.f, 8.f), 6.f, ccc4f(1, 1, 1, 1));
+        node->addChild(knob);
+        auto item = CCMenuItemSpriteExtra::create(node, this, cb);
+        put(item, cx, cy, true);
+        return item;
     }
 
     bool setup() override {
-        this->setTitle("System");
         this->setID("system-menu");
+        m_bgSprite->setVisible(false);
 
-        m_status = CCLabelBMFont::create("", "bigFont.fnt");
-        m_status->setScale(0.5f);
-        m_mainLayer->addChildAtPosition(m_status, Anchor::Center, {0, 62});
+        auto win = ui::rounded({m_size.width, m_size.height}, ui::PANEL);
+        m_mainLayer->addChildAtPosition(win, Anchor::Center);
+        win->setZOrder(-10);
 
-        m_info = CCLabelBMFont::create("", "chatFont.fnt");
-        m_info->setScale(0.8f);
-        m_mainLayer->addChildAtPosition(m_info, Anchor::Center, {0, 40});
+        auto side = ui::rounded({54, 244}, ui::SIDE);
+        m_mainLayer->addChildAtPosition(side, Anchor::Center, C(35, 130));
+        side->setZOrder(-9);
 
-        addButton("Record", {-100, 5}, menu_selector(SystemMenu::onRecord));
-        addButton("Replay", {0, 5},    menu_selector(SystemMenu::onReplay));
-        addButton("Stop",   {100, 5},  menu_selector(SystemMenu::onStop));
-
-        addButton("Save", {-55, -35}, menu_selector(SystemMenu::onSave));
-        addButton("Load", {55, -35},  menu_selector(SystemMenu::onLoad));
-
-        addButton("-", {-70, -75}, menu_selector(SystemMenu::onTpsDown), 0.6f);
-        addButton("+", {70, -75},  menu_selector(SystemMenu::onTpsUp),   0.6f);
-        m_tps = CCLabelBMFont::create("", "bigFont.fnt");
-        m_tps->setScale(0.5f);
-        m_mainLayer->addChildAtPosition(m_tps, Anchor::Center, {0, -75});
-
-        auto hint = CCLabelBMFont::create("Restart the level (R) after Record / Replay", "chatFont.fnt");
-        hint->setScale(0.6f);
-        hint->setOpacity(160);
-        m_mainLayer->addChildAtPosition(hint, Anchor::Center, {0, -102});
-
-        refresh();
+        rebuild();
         return true;
     }
 
-    void refresh() {
-        m_status->setString(fmt::format("Mode: {}", sys::name(sys::mode)).c_str());
-        m_info->setString(fmt::format("Inputs in macro: {}", sys::macro.size()).c_str());
-        m_tps->setString(fmt::format("TPS {}", Mod::get()->getSettingValue<int64_t>("tps")).c_str());
+    void rebuild() {
+        clearDyn();
+
+        bool hk = Mod::get()->getSettingValue<bool>("hotkeys");
+        int64_t tps = Mod::get()->getSettingValue<int64_t>("tps");
+
+        // sidebar
+        chip("MACRO",   m_tab == 0, 46, 35, 215, menu_selector(SystemMenu::onTab), 0);
+        chip("OPTIONS", m_tab == 1, 46, 35, 187, menu_selector(SystemMenu::onTab), 1);
+        text("v1.1.0", "chatFont.fnt", 0.7f, ui::GRAY, 0.5f, 35, 20);
+
+        if (m_tab == 0) {
+            // ---- Macro (mode chips) ----
+            card(70, 133, 176, 119, "Macro", hk ? "F1 / F2 / F3" : "None");
+            chip("Off",    sys::mode == Mode::Off,    50, 102, 204, menu_selector(SystemMenu::onMode), 0);
+            chip("Record", sys::mode == Mode::Record, 50, 158, 204, menu_selector(SystemMenu::onMode), 1);
+            chip("Replay", sys::mode == Mode::Replay, 50, 214, 204, menu_selector(SystemMenu::onMode), 2);
+            text(fmt::format("Status: {}", sys::name(sys::mode)), "chatFont.fnt", 0.85f, ui::WHITE, 0.5f, 158, 174);
+            text("Restart the level (R) after switching", "chatFont.fnt", 0.6f, ui::GRAY, 0.5f, 158, 152);
+
+            // ---- Recorder (info) ----
+            card(256, 133, 176, 119, "Recorder", "None");
+            text("Inputs", "chatFont.fnt", 0.85f, ui::GRAY, 0.f, 266, 208);
+            text(std::to_string(sys::macro.size()), "chatFont.fnt", 0.85f, ui::WHITE, 1.f, 422, 208);
+            text("Last frame", "chatFont.fnt", 0.85f, ui::GRAY, 0.f, 266, 182);
+            text(std::to_string(sys::macro.empty() ? 0 : sys::macro.back().frame),
+                 "chatFont.fnt", 0.85f, ui::WHITE, 1.f, 422, 182);
+            text("Mode", "chatFont.fnt", 0.85f, ui::GRAY, 0.f, 266, 156);
+            text(sys::name(sys::mode), "chatFont.fnt", 0.85f, ui::WHITE, 1.f, 422, 156);
+
+            // ---- File ----
+            card(70, 8, 176, 119, "File", hk ? "F4 / F5" : "None");
+            chip("Save", false, 70, 118, 81, menu_selector(SystemMenu::onSave), 0);
+            chip("Load", false, 70, 198, 81, menu_selector(SystemMenu::onLoad), 0);
+            text("Stored in the mod save folder", "chatFont.fnt", 0.6f, ui::GRAY, 0.5f, 158, 51);
+
+            // ---- Timer (TPS presets) ----
+            card(256, 8, 176, 119, "Timer", "None");
+            int presets[5] = {60, 120, 240, 480, 960};
+            for (int i = 0; i < 5; i++) {
+                chip(std::to_string(presets[i]).c_str(), tps == presets[i], 30,
+                     277 + i * 34.f, 81, menu_selector(SystemMenu::onTps), presets[i]);
+            }
+            text(fmt::format("TPS {}", tps), "chatFont.fnt", 0.85f, ui::WHITE, 0.5f, 344, 51);
+        }
+        else {
+            // ---- Hotkeys ----
+            card(70, 133, 176, 119, "Hotkeys", hk ? "On" : "Off");
+            text("Enable F1-F5", "chatFont.fnt", 0.85f, ui::WHITE, 0.f, 80, 208);
+            toggle(hk, 224, 208, menu_selector(SystemMenu::onHotkeys));
+            text("F1 record   F2 replay", "chatFont.fnt", 0.75f, ui::GRAY, 0.f, 80, 180);
+            text("F3 stop   F4 save   F5 load", "chatFont.fnt", 0.75f, ui::GRAY, 0.f, 80, 160);
+
+            // ---- Menu key ----
+            card(256, 133, 176, 119, "Menu", Mod::get()->getSettingValue<std::string>("menu-key"));
+            text("Open / close key", "chatFont.fnt", 0.85f, ui::WHITE, 0.f, 266, 208);
+            text("Change it in the mod settings", "chatFont.fnt", 0.7f, ui::GRAY, 0.f, 266, 180);
+            text("(Geode > System > Menu key)", "chatFont.fnt", 0.7f, ui::GRAY, 0.f, 266, 160);
+
+            // ---- About ----
+            card(70, 8, 362, 119, "System", "v1.1.0");
+            text("Macro bot for GD 2.2074 (Geode 4.10.2)", "chatFont.fnt", 0.85f, ui::WHITE, 0.f, 80, 80);
+            text("Records inputs frame by frame and replays them.", "chatFont.fnt", 0.75f, ui::GRAY, 0.f, 80, 56);
+            text("Do not submit bot runs as legit records.", "chatFont.fnt", 0.75f, ui::GRAY, 0.f, 80, 36);
+        }
     }
 
-    void onRecord(CCObject*) { sys::setMode(Mode::Record); refresh(); }
-    void onReplay(CCObject*) {
-        if (sys::macro.empty()) return sys::notify("System: macro is empty");
-        sys::setMode(Mode::Replay);
-        refresh();
+    // rebuilding inside a button callback would delete the pressed button,
+    // so do it on the next frame
+    void scheduleRebuild() {
+        Loader::get()->queueInMainThread([self = Ref<SystemMenu>(this)] {
+            self->rebuild();
+        });
     }
-    void onStop(CCObject*) { sys::setMode(Mode::Off); refresh(); }
+
+    void onTab(CCObject* s) {
+        m_tab = static_cast<CCNode*>(s)->getTag();
+        scheduleRebuild();
+    }
+
+    void onMode(CCObject* s) {
+        int t = static_cast<CCNode*>(s)->getTag();
+        if (t == 1) sys::setMode(Mode::Record);
+        else if (t == 2) {
+            if (sys::macro.empty()) sys::notify("System: macro is empty");
+            else sys::setMode(Mode::Replay);
+        }
+        else sys::setMode(Mode::Off);
+        scheduleRebuild();
+    }
+
     void onSave(CCObject*) { sys::save(); }
-    void onLoad(CCObject*) { sys::load(); refresh(); }
+    void onLoad(CCObject*) { sys::load(); scheduleRebuild(); }
 
-    void changeTps(int64_t delta) {
+    void onTps(CCObject* s) {
         if (sys::mode != Mode::Off) return sys::notify("System: stop first to change TPS");
-        int64_t v = Mod::get()->getSettingValue<int64_t>("tps") + delta;
-        v = std::clamp<int64_t>(v, 60, 960);
+        int v = static_cast<CCNode*>(s)->getTag();
         Mod::get()->setSettingValue<int64_t>("tps", v);
-        refresh();
+        scheduleRebuild();
     }
-    void onTpsDown(CCObject*) { changeTps(-60); }
-    void onTpsUp(CCObject*)   { changeTps(60); }
+
+    void onHotkeys(CCObject*) {
+        bool cur = Mod::get()->getSettingValue<bool>("hotkeys");
+        Mod::get()->setSettingValue<bool>("hotkeys", !cur);
+        scheduleRebuild();
+    }
 
 public:
     static SystemMenu* create() {
         auto ret = new SystemMenu();
-        if (ret->initAnchored(320.f, 230.f)) {
+        if (ret->initAnchored(440.f, 260.f)) {
             ret->autorelease();
             return ret;
         }
