@@ -5,6 +5,7 @@
 #include <Geode/modify/CCKeyboardDispatcher.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <vector>
 
@@ -93,20 +94,58 @@ namespace sys {
 // ------------------------------------------------------------------ menu ----
 
 namespace ui {
-    static const ccColor3B PANEL {14, 16, 21};
-    static const ccColor3B SIDE  {10, 12, 16};
-    static const ccColor3B CARD  {24, 27, 34};
-    static const ccColor3B CHIP  {43, 48, 60};
-    static const ccColor3B ACCENT{59, 110, 245};
-    static const ccColor3B WHITE {255, 255, 255};
-    static const ccColor3B GRAY  {150, 156, 168};
+    static const ccColor3B PANEL   {16, 18, 24};
+    static const ccColor3B SIDE    {11, 13, 17};
+    static const ccColor3B CARD    {27, 31, 40};
+    static const ccColor3B BORDER  {44, 49, 62};
+    static const ccColor3B CHIP    {45, 50, 64};
+    static const ccColor3B CHIP_B  {66, 73, 92};
+    static const ccColor3B ACCENT  {59, 110, 245};
+    static const ccColor3B ACCENT_B{110, 150, 255};
+    static const ccColor3B WHITE   {255, 255, 255};
+    static const ccColor3B GRAY    {150, 156, 168};
 
-    inline CCScale9Sprite* rounded(CCSize size, ccColor3B color) {
-        auto s = CCScale9Sprite::create("square02_001.png");
-        s->setContentSize(size);
-        s->setColor(color);
-        s->setOpacity(255);
-        return s;
+    inline ccColor4F f4(ccColor3B c) {
+        return ccc4f(c.r / 255.f, c.g / 255.f, c.b / 255.f, 1.f);
+    }
+
+    // filled rounded rectangle centered on (0,0), drawn as a polygon
+    inline CCDrawNode* shape(CCSize size, float radius, ccColor3B color) {
+        auto d = CCDrawNode::create();
+        float hw = size.width / 2, hh = size.height / 2;
+        float r = std::min(radius, std::min(hw, hh));
+        std::vector<CCPoint> pts;
+        auto arc = [&](float cx, float cy, float a0) {
+            for (int i = 0; i <= 6; i++) {
+                float a = (a0 + 90.f * i / 6.f) * 3.14159265f / 180.f;
+                pts.push_back(ccp(cx + r * cosf(a), cy + r * sinf(a)));
+            }
+        };
+        arc(hw - r, hh - r, 0);
+        arc(-hw + r, hh - r, 90);
+        arc(-hw + r, -hh + r, 180);
+        arc(hw - r, -hh + r, 270);
+        d->drawPolygon(pts.data(), static_cast<unsigned int>(pts.size()), f4(color), 0.f, ccc4f(0, 0, 0, 0));
+        return d;
+    }
+
+    // rounded rectangle with a thin border
+    inline CCNode* rounded(CCSize size, ccColor3B fill, ccColor3B border, float radius = 6.f) {
+        auto n = CCNode::create();
+        n->addChild(shape(size, radius, border));
+        n->addChild(shape({size.width - 2, size.height - 2}, std::max(radius - 1.f, 1.f), fill));
+        return n;
+    }
+
+    inline CCDrawNode* circle(float radius, ccColor3B color) {
+        auto d = CCDrawNode::create();
+        std::vector<CCPoint> pts;
+        for (int i = 0; i < 24; i++) {
+            float a = 2.f * 3.14159265f * i / 24.f;
+            pts.push_back(ccp(radius * cosf(a), radius * sinf(a)));
+        }
+        d->drawPolygon(pts.data(), 24, f4(color), 0.f, ccc4f(0, 0, 0, 0));
+        return d;
     }
 }
 
@@ -144,7 +183,7 @@ protected:
 
     // a rounded card with a title on the left and a "keybind" label on the right
     void card(float x, float y, float w, float h, char const* title, std::string const& right) {
-        auto bg = ui::rounded({w, h}, ui::CARD);
+        auto bg = ui::rounded({w, h}, ui::CARD, ui::BORDER, 8.f);
         put(bg, x + w / 2, y + h / 2);
         text(title, "bigFont.fnt", 0.42f, ui::WHITE, 0.f, x + 10, y + h - 14);
         text(right, "chatFont.fnt", 0.8f, ui::GRAY, 1.f, x + w - 10, y + h - 14);
@@ -152,15 +191,17 @@ protected:
 
     CCMenuItemSpriteExtra* chip(char const* label, bool selected, float w, float cx, float cy,
                                 SEL_MenuHandler cb, int tag) {
+        const float h = 22.f;
         auto node = CCNode::create();
-        node->setContentSize({w, 20});
+        node->setContentSize({w, h});
         node->setAnchorPoint({0.5f, 0.5f});
-        auto bg = ui::rounded({w, 20}, selected ? ui::ACCENT : ui::CHIP);
-        bg->setPosition({w / 2, 10});
+        auto bg = ui::rounded({w, h}, selected ? ui::ACCENT : ui::CHIP,
+                              selected ? ui::ACCENT_B : ui::CHIP_B, 6.f);
+        bg->setPosition({w / 2, h / 2});
         node->addChild(bg);
         auto l = CCLabelBMFont::create(label, "bigFont.fnt");
         l->limitLabelWidth(w - 8, 0.38f, 0.1f);
-        l->setPosition({w / 2, 10});
+        l->setPosition({w / 2, h / 2 + 1});
         node->addChild(l);
         auto item = CCMenuItemSpriteExtra::create(node, this, cb);
         item->setTag(tag);
@@ -170,13 +211,14 @@ protected:
 
     CCMenuItemSpriteExtra* toggle(bool on, float cx, float cy, SEL_MenuHandler cb) {
         auto node = CCNode::create();
-        node->setContentSize({34, 16});
+        node->setContentSize({36, 18});
         node->setAnchorPoint({0.5f, 0.5f});
-        auto track = ui::rounded({34, 16}, on ? ui::ACCENT : ui::CHIP);
-        track->setPosition({17, 8});
+        auto track = ui::rounded({36, 18}, on ? ui::ACCENT : ui::CHIP,
+                                 on ? ui::ACCENT_B : ui::CHIP_B, 9.f);
+        track->setPosition({18, 9});
         node->addChild(track);
-        auto knob = CCDrawNode::create();
-        knob->drawDot(ccp(on ? 26.f : 8.f, 8.f), 6.f, ccc4f(1, 1, 1, 1));
+        auto knob = ui::circle(6.5f, ui::WHITE);
+        knob->setPosition({on ? 27.f : 9.f, 9.f});
         node->addChild(knob);
         auto item = CCMenuItemSpriteExtra::create(node, this, cb);
         put(item, cx, cy, true);
@@ -187,11 +229,11 @@ protected:
         this->setID("system-menu");
         m_bgSprite->setVisible(false);
 
-        auto win = ui::rounded({m_size.width, m_size.height}, ui::PANEL);
+        auto win = ui::rounded({m_size.width, m_size.height}, ui::PANEL, ui::BORDER, 10.f);
         m_mainLayer->addChildAtPosition(win, Anchor::Center);
         win->setZOrder(-10);
 
-        auto side = ui::rounded({54, 244}, ui::SIDE);
+        auto side = ui::rounded({58, 244}, ui::SIDE, ui::BORDER, 8.f);
         m_mainLayer->addChildAtPosition(side, Anchor::Center, C(35, 130));
         side->setZOrder(-9);
 
@@ -206,8 +248,8 @@ protected:
         int64_t tps = Mod::get()->getSettingValue<int64_t>("tps");
 
         // sidebar
-        chip("MACRO",   m_tab == 0, 46, 35, 215, menu_selector(SystemMenu::onTab), 0);
-        chip("OPTIONS", m_tab == 1, 46, 35, 187, menu_selector(SystemMenu::onTab), 1);
+        chip("MACRO",   m_tab == 0, 50, 35, 215, menu_selector(SystemMenu::onTab), 0);
+        chip("OPTIONS", m_tab == 1, 50, 35, 187, menu_selector(SystemMenu::onTab), 1);
         text("v1.1.0", "chatFont.fnt", 0.7f, ui::GRAY, 0.5f, 35, 20);
 
         if (m_tab == 0) {
