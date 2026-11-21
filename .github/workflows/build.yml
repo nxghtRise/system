@@ -18,7 +18,7 @@ jobs:
         with:
           combine: true
           sdk: v4.10.2
-          bindings-ref: v4.10.2
+          bindings-ref: 5129d7d6dc7a1b7d6770a8a422e1b5266bed704e
       - uses: actions/upload-artifact@v4
         with:
           name: system-mod
