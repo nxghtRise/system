@@ -3,6 +3,7 @@
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/CCScheduler.hpp>
 #include <Geode/modify/CCKeyboardDispatcher.hpp>
+#include <Geode/modify/MenuLayer.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -89,6 +90,21 @@ namespace sys {
         if (s == "F8")       return KEY_F8;
         return KEY_Insert;
     }
+
+    // applies the FPS limit (or restores the one the game had before we touched it)
+    inline void applyFps() {
+        static double orig = 0.0;
+        auto dir = CCDirector::get();
+        if (orig <= 0.0) orig = dir->getAnimationInterval();
+
+        double interval = orig;
+        if (Mod::get()->getSettingValue<bool>("fps-unlock")) {
+            int64_t fps = std::max<int64_t>(Mod::get()->getSettingValue<int64_t>("fps"), 10);
+            interval = 1.0 / static_cast<double>(fps);
+        }
+        dir->setAnimationInterval(interval);
+        CCApplication::sharedApplication()->setAnimationInterval(interval);
+    }
 }
 
 // ------------------------------------------------------------------ menu ----
@@ -153,6 +169,8 @@ class SystemMenu : public Popup<> {
 protected:
     int m_tab = 0;
     std::vector<Ref<CCNode>> m_dyn; // everything that gets rebuilt on change
+    TextInput* m_fpsInput = nullptr;
+    TextInput* m_tpsInput = nullptr;
 
     // design coordinates: (0,0) = bottom-left of the window -> offset from center
     CCPoint C(float x, float y) const {
@@ -169,6 +187,8 @@ protected:
     void clearDyn() {
         for (auto& n : m_dyn) n->removeFromParent();
         m_dyn.clear();
+        m_fpsInput = nullptr;
+        m_tpsInput = nullptr;
     }
 
     CCLabelBMFont* text(std::string const& s, char const* font, float scale,
@@ -186,7 +206,17 @@ protected:
         auto bg = ui::rounded({w, h}, ui::CARD, ui::BORDER, 8.f);
         put(bg, x + w / 2, y + h / 2);
         text(title, "bigFont.fnt", 0.42f, ui::WHITE, 0.f, x + 10, y + h - 14);
-        text(right, "chatFont.fnt", 0.8f, ui::GRAY, 1.f, x + w - 10, y + h - 14);
+        if (!right.empty()) text(right, "chatFont.fnt", 0.8f, ui::GRAY, 1.f, x + w - 10, y + h - 14);
+    }
+
+    TextInput* makeInput(std::string const& value, char const* placeholder, float x, float y) {
+        auto in = TextInput::create(80.f, placeholder, "bigFont.fnt");
+        in->setScale(0.7f);
+        in->setFilter("0123456789");
+        in->setMaxCharCount(4);
+        in->setString(value);
+        put(in, x, y);
+        return in;
     }
 
     CCMenuItemSpriteExtra* chip(char const* label, bool selected, float w, float cx, float cy,
@@ -250,11 +280,11 @@ protected:
         // sidebar
         chip("MACRO",   m_tab == 0, 50, 35, 215, menu_selector(SystemMenu::onTab), 0);
         chip("OPTIONS", m_tab == 1, 50, 35, 187, menu_selector(SystemMenu::onTab), 1);
-        text("v1.1.0", "chatFont.fnt", 0.7f, ui::GRAY, 0.5f, 35, 20);
+        text("v1.2.0", "chatFont.fnt", 0.7f, ui::GRAY, 0.5f, 35, 20);
 
         if (m_tab == 0) {
             // ---- Macro (mode chips) ----
-            card(70, 133, 176, 119, "Macro", hk ? "F1 / F2 / F3" : "None");
+            card(70, 133, 176, 119, "Macro", hk ? "F1 / F2 / F3" : "");
             chip("Off",    sys::mode == Mode::Off,    50, 102, 204, menu_selector(SystemMenu::onMode), 0);
             chip("Record", sys::mode == Mode::Record, 50, 158, 204, menu_selector(SystemMenu::onMode), 1);
             chip("Replay", sys::mode == Mode::Replay, 50, 214, 204, menu_selector(SystemMenu::onMode), 2);
@@ -262,7 +292,7 @@ protected:
             text("Restart the level (R) after switching", "chatFont.fnt", 0.6f, ui::GRAY, 0.5f, 158, 152);
 
             // ---- Recorder (info) ----
-            card(256, 133, 176, 119, "Recorder", "None");
+            card(256, 133, 176, 119, "Recorder", "");
             text("Inputs", "chatFont.fnt", 0.85f, ui::GRAY, 0.f, 266, 208);
             text(std::to_string(sys::macro.size()), "chatFont.fnt", 0.85f, ui::WHITE, 1.f, 422, 208);
             text("Last frame", "chatFont.fnt", 0.85f, ui::GRAY, 0.f, 266, 182);
@@ -272,19 +302,26 @@ protected:
             text(sys::name(sys::mode), "chatFont.fnt", 0.85f, ui::WHITE, 1.f, 422, 156);
 
             // ---- File ----
-            card(70, 8, 176, 119, "File", hk ? "F4 / F5" : "None");
+            card(70, 8, 176, 119, "File", hk ? "F4 / F5" : "");
             chip("Save", false, 70, 118, 81, menu_selector(SystemMenu::onSave), 0);
             chip("Load", false, 70, 198, 81, menu_selector(SystemMenu::onLoad), 0);
             text("Stored in the mod save folder", "chatFont.fnt", 0.6f, ui::GRAY, 0.5f, 158, 51);
 
-            // ---- Timer (TPS presets) ----
-            card(256, 8, 176, 119, "Timer", "None");
-            int presets[5] = {60, 120, 240, 480, 960};
-            for (int i = 0; i < 5; i++) {
-                chip(std::to_string(presets[i]).c_str(), tps == presets[i], 30,
-                     277 + i * 34.f, 81, menu_selector(SystemMenu::onTps), presets[i]);
-            }
-            text(fmt::format("TPS {}", tps), "chatFont.fnt", 0.85f, ui::WHITE, 0.5f, 344, 51);
+            // ---- Display (FPS / TPS) ----
+            card(256, 8, 176, 119, "Display", "");
+            bool fpsU = Mod::get()->getSettingValue<bool>("fps-unlock");
+            bool tpsU = Mod::get()->getSettingValue<bool>("tps-unlock");
+            int64_t fps = Mod::get()->getSettingValue<int64_t>("fps");
+
+            m_fpsInput = makeInput(std::to_string(fps), "FPS", 288, 88);
+            text("FPS", "chatFont.fnt", 0.85f, ui::GRAY, 0.f, 320, 88);
+            chip("Unlock FPS", fpsU, 68, 387, 88, menu_selector(SystemMenu::onUnlock), 0);
+
+            m_tpsInput = makeInput(std::to_string(tps), "TPS", 288, 58);
+            text("TPS", "chatFont.fnt", 0.85f, ui::GRAY, 0.f, 320, 58);
+            chip("Unlock TPS", tpsU, 68, 387, 58, menu_selector(SystemMenu::onUnlock), 1);
+
+            chip("Apply", false, 80, 344, 28, menu_selector(SystemMenu::onApply), 0);
         }
         else {
             // ---- Hotkeys ----
@@ -301,7 +338,7 @@ protected:
             text("(Geode > System > Menu key)", "chatFont.fnt", 0.7f, ui::GRAY, 0.f, 266, 160);
 
             // ---- About ----
-            card(70, 8, 362, 119, "System", "v1.1.0");
+            card(70, 8, 362, 119, "System", "v1.2.0");
             text("Macro bot for GD 2.2074 (Geode 4.10.2)", "chatFont.fnt", 0.85f, ui::WHITE, 0.f, 80, 80);
             text("Records inputs frame by frame and replays them.", "chatFont.fnt", 0.75f, ui::GRAY, 0.f, 80, 56);
             text("Do not submit bot runs as legit records.", "chatFont.fnt", 0.75f, ui::GRAY, 0.f, 80, 36);
@@ -335,10 +372,32 @@ protected:
     void onSave(CCObject*) { sys::save(); }
     void onLoad(CCObject*) { sys::load(); scheduleRebuild(); }
 
-    void onTps(CCObject* s) {
-        if (sys::mode != Mode::Off) return sys::notify("System: stop first to change TPS");
-        int v = static_cast<CCNode*>(s)->getTag();
-        Mod::get()->setSettingValue<int64_t>("tps", v);
+    void onUnlock(CCObject* s) {
+        int t = static_cast<CCNode*>(s)->getTag();
+        if (t == 0) {
+            bool cur = Mod::get()->getSettingValue<bool>("fps-unlock");
+            Mod::get()->setSettingValue<bool>("fps-unlock", !cur);
+            sys::applyFps();
+        } else {
+            if (sys::mode != Mode::Off) return sys::notify("System: stop first to change TPS");
+            bool cur = Mod::get()->getSettingValue<bool>("tps-unlock");
+            Mod::get()->setSettingValue<bool>("tps-unlock", !cur);
+        }
+        scheduleRebuild();
+    }
+
+    void onApply(CCObject*) {
+        if (m_fpsInput) {
+            int v = std::clamp(std::atoi(m_fpsInput->getString().c_str()), 10, 1000);
+            Mod::get()->setSettingValue<int64_t>("fps", v);
+        }
+        if (m_tpsInput) {
+            int v = std::clamp(std::atoi(m_tpsInput->getString().c_str()), 10, 2000);
+            if (sys::mode != Mode::Off) sys::notify("System: stop first to change TPS");
+            else Mod::get()->setSettingValue<int64_t>("tps", v);
+        }
+        sys::applyFps();
+        sys::notify("System: display settings applied");
         scheduleRebuild();
     }
 
@@ -434,18 +493,37 @@ class $modify(SysPlay, PlayLayer) {
 
 class $modify(SysScheduler, CCScheduler) {
     void update(float dt) {
-        if (sys::mode == Mode::Off) {
+        bool unlocked = Mod::get()->getSettingValue<bool>("tps-unlock");
+
+        // locked + not recording/replaying -> leave the game alone
+        if (!unlocked && sys::mode == Mode::Off) {
             sys::leftover = 0.f;
             return CCScheduler::update(dt);
         }
 
-        float step = 1.f / static_cast<float>(Mod::get()->getSettingValue<int64_t>("tps"));
+        int64_t tps = unlocked ? Mod::get()->getSettingValue<int64_t>("tps") : 240;
+        tps = std::clamp<int64_t>(tps, 10, 2000);
+
+        float step = 1.f / static_cast<float>(tps);
         sys::leftover += dt;
         int steps = static_cast<int>(sys::leftover / step);
         sys::leftover -= steps * step;
 
         for (int i = 0; i < steps; i++)
             CCScheduler::update(step);
+    }
+};
+
+// re-apply the saved FPS limit once when the game starts
+class $modify(SysMenuLayer, MenuLayer) {
+    bool init() {
+        if (!MenuLayer::init()) return false;
+        static bool once = false;
+        if (!once) {
+            once = true;
+            sys::applyFps();
+        }
+        return true;
     }
 };
 
