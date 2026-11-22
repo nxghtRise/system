@@ -7,7 +7,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <ctime>
+#include <filesystem>
 #include <fstream>
+#include <string>
 #include <vector>
 
 using namespace geode::prelude;
@@ -43,38 +47,121 @@ namespace sys {
         Notification::create(text, NotificationIcon::None, 1.f)->show();
     }
 
-    inline void setMode(Mode m) {
-        mode = m;
-        idx = 0;
-        if (m == Mode::Record) macro.clear();
-        notify(fmt::format("System: {}", name(m)));
+    inline std::string currentName;   // name of the loaded / last saved replay
+
+    inline std::string u8(std::filesystem::path const& p) {
+        auto s = p.u8string();
+        return std::string(s.begin(), s.end());
     }
 
-    inline std::filesystem::path file() {
-        return Mod::get()->getSaveDir() / "macro.txt";
+    // all replays live here (created automatically)
+    inline std::filesystem::path dir() {
+        auto d = Mod::get()->getSaveDir() / "macros";
+        std::error_code ec;
+        std::filesystem::create_directories(d, ec);
+        return d;
     }
 
-    inline void save() {
-        std::ofstream out(file());
-        if (!out) return notify("System: cannot write file");
+    inline std::string sanitize(std::string const& s) {
+        std::string out;
+        for (char c : s) {
+            if (static_cast<unsigned char>(c) < 32) continue;
+            if (std::string("\\/:*?\"<>|").find(c) != std::string::npos) continue;
+            out += c;
+        }
+        while (!out.empty() && out.back() == ' ') out.pop_back();
+        while (!out.empty() && out.front() == ' ') out.erase(out.begin());
+        return out;
+    }
+
+    inline std::filesystem::path pathFor(std::string const& name) {
+        std::string full = name + ".macro";
+        return dir() / std::filesystem::path(std::u8string(full.begin(), full.end()));
+    }
+
+    inline bool saveAs(std::string name) {
+        name = sanitize(name);
+        if (name.empty()) return false;
+        std::ofstream out(pathFor(name));
+        if (!out) return false;
         for (auto& i : macro)
             out << i.frame << ' ' << i.button << ' ' << i.down << ' ' << i.player1 << '\n';
-        notify(fmt::format("System: saved {} inputs", macro.size()));
+        currentName = name;
+        return true;
     }
 
-    inline void load() {
-        std::ifstream in(file());
-        if (!in) return notify("System: no saved macro");
-        macro.clear();
+    inline bool loadFrom(std::string const& name) {
+        std::ifstream in(pathFor(name));
+        if (!in) return false;
+        std::vector<Input> loaded;
         Input i{};
         int d, p;
         while (in >> i.frame >> i.button >> d >> p) {
             i.down = d;
             i.player1 = p;
-            macro.push_back(i);
+            loaded.push_back(i);
         }
+        macro = std::move(loaded);
         idx = 0;
-        notify(fmt::format("System: loaded {} inputs", macro.size()));
+        currentName = name;
+        return true;
+    }
+
+    inline bool removeFile(std::string const& name) {
+        std::error_code ec;
+        return std::filesystem::remove(pathFor(name), ec);
+    }
+
+    inline std::vector<std::string> list() {
+        std::vector<std::string> names;
+        std::error_code ec;
+        for (auto& e : std::filesystem::directory_iterator(dir(), ec)) {
+            if (e.path().extension() == ".macro") names.push_back(u8(e.path().stem()));
+        }
+        std::sort(names.begin(), names.end(), [](std::string const& a, std::string const& b) {
+            return std::lexicographical_compare(a.begin(), a.end(), b.begin(), b.end(),
+                [](char x, char y) { return std::tolower((unsigned char)x) < std::tolower((unsigned char)y); });
+        });
+        return names;
+    }
+
+    inline void autoSave() {
+        std::string name = currentName;
+        if (name.empty()) {
+            char buf[40];
+            std::time_t t = std::time(nullptr);
+            std::strftime(buf, sizeof buf, "auto_%Y%m%d_%H%M%S", std::localtime(&t));
+            name = buf;
+        }
+        if (saveAs(name)) notify(fmt::format("System: auto-saved '{}'", name));
+    }
+
+    inline void setMode(Mode m) {
+        // leaving Record mode: optionally save the fresh recording
+        if (mode == Mode::Record && m != Mode::Record && !macro.empty()
+            && Mod::get()->getSettingValue<bool>("autosave")) {
+            autoSave();
+        }
+        mode = m;
+        idx = 0;
+        if (m == Mode::Record) {
+            macro.clear();
+            currentName.clear(); // a new recording must never overwrite a loaded replay
+        }
+        notify(fmt::format("System: {}", name(m)));
+    }
+
+    // F4 / F5 and the Save / Load buttons on the Macro tab
+    inline void save() {
+        std::string n = currentName.empty() ? "quicksave" : currentName;
+        if (saveAs(n)) notify(fmt::format("System: saved '{}' ({} inputs)", n, macro.size()));
+        else notify("System: cannot write file");
+    }
+
+    inline void load() {
+        std::string n = currentName.empty() ? "quicksave" : currentName;
+        if (loadFrom(n)) notify(fmt::format("System: loaded '{}' ({} inputs)", n, macro.size()));
+        else notify(fmt::format("System: no replay '{}'", n));
     }
 
     inline enumKeyCodes menuKey() {
@@ -171,6 +258,9 @@ protected:
     std::vector<Ref<CCNode>> m_dyn; // everything that gets rebuilt on change
     TextInput* m_fpsInput = nullptr;
     TextInput* m_tpsInput = nullptr;
+    TextInput* m_nameInput = nullptr;
+    std::vector<std::string> m_files;
+    int m_page = 0;
 
     // design coordinates: (0,0) = bottom-left of the window -> offset from center
     CCPoint C(float x, float y) const {
@@ -189,6 +279,7 @@ protected:
         m_dyn.clear();
         m_fpsInput = nullptr;
         m_tpsInput = nullptr;
+        m_nameInput = nullptr;
     }
 
     CCLabelBMFont* text(std::string const& s, char const* font, float scale,
@@ -273,14 +364,16 @@ protected:
 
     void rebuild() {
         clearDyn();
+        if (m_tab == 1) m_files = sys::list();
 
         bool hk = Mod::get()->getSettingValue<bool>("hotkeys");
         int64_t tps = Mod::get()->getSettingValue<int64_t>("tps");
 
         // sidebar
         chip("MACRO",   m_tab == 0, 50, 35, 215, menu_selector(SystemMenu::onTab), 0);
-        chip("OPTIONS", m_tab == 1, 50, 35, 187, menu_selector(SystemMenu::onTab), 1);
-        text("v1.2.0", "chatFont.fnt", 0.7f, ui::GRAY, 0.5f, 35, 20);
+        chip("REPLAYS", m_tab == 1, 50, 35, 187, menu_selector(SystemMenu::onTab), 1);
+        chip("OPTIONS", m_tab == 2, 50, 35, 159, menu_selector(SystemMenu::onTab), 2);
+        text("v1.3.0", "chatFont.fnt", 0.7f, ui::GRAY, 0.5f, 35, 20);
 
         if (m_tab == 0) {
             // ---- Macro (mode chips) ----
@@ -305,7 +398,9 @@ protected:
             card(70, 8, 176, 119, "File", hk ? "F4 / F5" : "");
             chip("Save", false, 70, 118, 81, menu_selector(SystemMenu::onSave), 0);
             chip("Load", false, 70, 198, 81, menu_selector(SystemMenu::onLoad), 0);
-            text("Stored in the mod save folder", "chatFont.fnt", 0.6f, ui::GRAY, 0.5f, 158, 51);
+            auto cur = text(fmt::format("Current: {}", sys::currentName.empty() ? "-" : sys::currentName),
+                            "chatFont.fnt", 0.75f, ui::GRAY, 0.5f, 158, 51);
+            cur->limitLabelWidth(160.f, 0.75f, 0.3f);
 
             // ---- Display (FPS / TPS) ----
             card(256, 8, 176, 119, "Display", "");
@@ -323,6 +418,48 @@ protected:
 
             chip("Apply", false, 80, 344, 28, menu_selector(SystemMenu::onApply), 0);
         }
+        else if (m_tab == 1) {
+            bool autosave = Mod::get()->getSettingValue<bool>("autosave");
+
+            // ---- Replay controls ----
+            card(70, 8, 176, 244, "Replay", "");
+            m_nameInput = TextInput::create(150.f, "File name...", "bigFont.fnt");
+            m_nameInput->setScale(0.9f);
+            m_nameInput->setMaxCharCount(24);
+            m_nameInput->setString(sys::currentName);
+            put(m_nameInput, 158, 206);
+
+            chip("Save",      false,    70, 118, 172, menu_selector(SystemMenu::onSaveNamed), 0);
+            chip("Delete",    false,    70, 198, 172, menu_selector(SystemMenu::onDelete), 0);
+            chip("Clear",     false,    70, 118, 144, menu_selector(SystemMenu::onClear), 0);
+            chip("Auto-save", autosave, 70, 198, 144, menu_selector(SystemMenu::onAutosave), 0);
+            chip("Open folder", false, 150, 158, 116, menu_selector(SystemMenu::onOpenFolder), 0);
+
+            auto sel = text(fmt::format("Selected: {}", sys::currentName.empty() ? "-" : sys::currentName),
+                            "chatFont.fnt", 0.8f, ui::WHITE, 0.5f, 158, 84);
+            sel->limitLabelWidth(160.f, 0.8f, 0.3f);
+            text(fmt::format("Inputs: {}", sys::macro.size()), "chatFont.fnt", 0.8f, ui::GRAY, 0.5f, 158, 62);
+            text("Click a replay on the right to load it", "chatFont.fnt", 0.6f, ui::GRAY, 0.5f, 158, 36);
+
+            // ---- Saved replays (paged list) ----
+            const int perPage = 7;
+            int total = static_cast<int>(m_files.size());
+            int pages = std::max(1, (total + perPage - 1) / perPage);
+            m_page = std::clamp(m_page, 0, pages - 1);
+
+            card(256, 8, 176, 244, "Saved replays", fmt::format("{} / {}", m_page + 1, pages));
+            if (total == 0) {
+                text("No saved replays yet", "chatFont.fnt", 0.85f, ui::GRAY, 0.5f, 344, 130);
+            }
+            for (int k = 0; k < perPage; k++) {
+                int i = m_page * perPage + k;
+                if (i >= total) break;
+                chip(m_files[i].c_str(), m_files[i] == sys::currentName, 156, 344, 208 - k * 25.f,
+                     menu_selector(SystemMenu::onPick), i);
+            }
+            chip("<", false, 40, 290, 24, menu_selector(SystemMenu::onPage), -1);
+            chip(">", false, 40, 398, 24, menu_selector(SystemMenu::onPage), 1);
+        }
         else {
             // ---- Hotkeys ----
             card(70, 133, 176, 119, "Hotkeys", hk ? "On" : "Off");
@@ -338,7 +475,7 @@ protected:
             text("(Geode > System > Menu key)", "chatFont.fnt", 0.7f, ui::GRAY, 0.f, 266, 160);
 
             // ---- About ----
-            card(70, 8, 362, 119, "System", "v1.2.0");
+            card(70, 8, 362, 119, "System", "v1.3.0");
             text("Macro bot for GD 2.2074 (Geode 4.10.2)", "chatFont.fnt", 0.85f, ui::WHITE, 0.f, 80, 80);
             text("Records inputs frame by frame and replays them.", "chatFont.fnt", 0.75f, ui::GRAY, 0.f, 80, 56);
             text("Do not submit bot runs as legit records.", "chatFont.fnt", 0.75f, ui::GRAY, 0.f, 80, 36);
@@ -398,6 +535,64 @@ protected:
         }
         sys::applyFps();
         sys::notify("System: display settings applied");
+        scheduleRebuild();
+    }
+
+    void onSaveNamed(CCObject*) {
+        std::string name = m_nameInput ? m_nameInput->getString() : sys::currentName;
+        if (sys::sanitize(name).empty()) return sys::notify("System: enter a file name");
+        if (sys::macro.empty()) return sys::notify("System: macro is empty");
+        if (sys::saveAs(name)) sys::notify(fmt::format("System: saved '{}'", sys::currentName));
+        else sys::notify("System: cannot write file");
+        scheduleRebuild();
+    }
+
+    void onDelete(CCObject*) {
+        std::string name = sys::sanitize(m_nameInput ? m_nameInput->getString() : sys::currentName);
+        if (name.empty()) name = sys::currentName;
+        if (name.empty()) return sys::notify("System: pick a replay first");
+        if (sys::removeFile(name)) {
+            sys::notify(fmt::format("System: deleted '{}'", name));
+            if (sys::currentName == name) sys::currentName.clear();
+        } else {
+            sys::notify("System: replay not found");
+        }
+        scheduleRebuild();
+    }
+
+    void onClear(CCObject*) {
+        if (sys::mode != Mode::Off) return sys::notify("System: stop first");
+        sys::macro.clear();
+        sys::idx = 0;
+        sys::currentName.clear();
+        sys::notify("System: macro cleared");
+        scheduleRebuild();
+    }
+
+    void onAutosave(CCObject*) {
+        bool cur = Mod::get()->getSettingValue<bool>("autosave");
+        Mod::get()->setSettingValue<bool>("autosave", !cur);
+        scheduleRebuild();
+    }
+
+    void onOpenFolder(CCObject*) {
+        geode::utils::file::openFolder(sys::dir());
+    }
+
+    void onPick(CCObject* s) {
+        int i = static_cast<CCNode*>(s)->getTag();
+        if (sys::mode != Mode::Off) return sys::notify("System: stop first");
+        if (i < 0 || i >= static_cast<int>(m_files.size())) return;
+        if (sys::loadFrom(m_files[i]))
+            sys::notify(fmt::format("System: loaded '{}' ({} inputs)", m_files[i], sys::macro.size()));
+        else
+            sys::notify("System: cannot read replay");
+        scheduleRebuild();
+    }
+
+    void onPage(CCObject* s) {
+        m_page += static_cast<CCNode*>(s)->getTag();
+        if (m_page < 0) m_page = 0;
         scheduleRebuild();
     }
 
