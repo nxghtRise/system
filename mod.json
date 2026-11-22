@@ -3,7 +3,7 @@
 	"gd": {
 		"win": "2.2074"
 	},
-	"version": "v1.1.0",
+	"version": "v1.2.0",
 	"id": "yourname.system",
 	"name": "System",
 	"developer": "yourname",
@@ -14,7 +14,18 @@
 			"name": "Menu key",
 			"description": "Key that opens and closes the System menu.",
 			"default": "Insert",
-			"one-of": ["Insert", "Tab", "Home", "End", "Delete", "PageUp", "PageDown", "F6", "F7", "F8"]
+			"one-of": [
+				"Insert",
+				"Tab",
+				"Home",
+				"End",
+				"Delete",
+				"PageUp",
+				"PageDown",
+				"F6",
+				"F7",
+				"F8"
+			]
 		},
 		"hotkeys": {
 			"type": "bool",
@@ -25,10 +36,30 @@
 		"tps": {
 			"type": "int",
 			"name": "TPS",
-			"description": "Fixed physics steps per second used while recording/replaying.",
+			"description": "Physics steps per second used when TPS is unlocked (also editable in the System menu).",
 			"default": 240,
-			"min": 60,
-			"max": 960
+			"min": 10,
+			"max": 2000
+		},
+		"tps-unlock": {
+			"type": "bool",
+			"name": "Unlock TPS",
+			"description": "Run the game with a custom fixed TPS. When off, TPS is only fixed (240) while recording/replaying.",
+			"default": false
+		},
+		"fps": {
+			"type": "int",
+			"name": "FPS",
+			"description": "FPS limit used when FPS is unlocked (also editable in the System menu).",
+			"default": 60,
+			"min": 10,
+			"max": 1000
+		},
+		"fps-unlock": {
+			"type": "bool",
+			"name": "Unlock FPS",
+			"description": "Use the custom FPS limit instead of the game's own.",
+			"default": false
 		}
 	}
 }
