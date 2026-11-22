@@ -3,7 +3,7 @@
 	"gd": {
 		"win": "2.2074"
 	},
-	"version": "v1.2.0",
+	"version": "v1.3.0",
 	"id": "yourname.system",
 	"name": "System",
 	"developer": "yourname",
@@ -59,6 +59,12 @@
 			"type": "bool",
 			"name": "Unlock FPS",
 			"description": "Use the custom FPS limit instead of the game's own.",
+			"default": false
+		},
+		"autosave": {
+			"type": "bool",
+			"name": "Auto-save recordings",
+			"description": "Save a recording to the replay list automatically when you stop recording.",
 			"default": false
 		}
 	}
